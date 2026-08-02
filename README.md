@@ -4,14 +4,13 @@ Working OpenWrt port for a Qualcomm IPQ5018 based Mercusys router, built against
 (`ce16dd8`). Everything below was verified on real hardware, with **kernel 6.18.39** as well as
 6.12.100.
 
-> **Read "Before you flash this" first.** The MAC address is currently hard-coded in the DTS
-> for one specific unit. You will want to change that.
+> **Kernel 6.18 needs fixes that are not in a release yet.** 6.18 added OTP support for this
+> flash chip, and on this board that leaves the chip serving its OTP area instead of the array:
+> the whole flash reads as `0xff` and every write fails. It looks exactly like a destroyed
+> device while nothing at all is damaged. [Details below.](#kernel-618-and-the-otp-trap)
+> The images here contain the fix. Do not run a stock 6.18 build on this router.
 
-> **Kernel 6.18 needs a fix that is not upstream yet.** 6.18 added OTP support for this flash
-> chip, and that support leaves the chip stuck in OTP mode, where the whole flash reads as
-> `0xff` and every write fails. It looks exactly like a destroyed device but nothing is damaged.
-> [Details below.](#kernel-618-and-the-otp-trap) The images here contain the fix. Do not run a
-> stock 6.18 build on this router.
+The MAC address is read from the flash at runtime, so the prebuilt images work on any unit.
 
 ## Download
 
@@ -28,9 +27,22 @@ The complete tree is a branch on a fork of the official OpenWrt repository:
 
 **https://github.com/Gameplayer-1-8/openwrt/tree/mercusys-mr80x-v2-6.18**
 
-Four commits on top of `ce16dd8`: the switch detection retry, the SPI NAND OTP fix, the ath11k
-ring sizes, and the device support itself. The `src/` directory in this repository is the older
-patch-set form of the same changes, kept for reference.
+Seven commits on top of `ce16dd8`. Three of them are carried unmodified from
+[openwrt/openwrt#24197](https://github.com/openwrt/openwrt/pull/24197) by Stanislaw Pal, which
+brings up the TP-Link Archer AX55 v1 on the same silicon and fixes three things properly that
+were worked around here before:
+
+| Carried patch | What it does on this board |
+|---|---|
+| `SET_FEATURE` off-by-one in `spi-qpic-snand` | the real cause of the SPI NAND getting stuck in OTP mode |
+| RTL8365MB reset and SerDes settle times | switch found on the first try, and 2.5 Gbit became reliable |
+| CMN PLL bus clocks stay enabled | stops the SoC hanging on a bus access shortly after probe |
+
+The remaining four are the ESMT OTP patch, the ath11k ring sizes, a switch-detection retry that
+only exists for the 6.12 fallback, and the device support itself. The `src/` directory in this
+repository is the older patch-set form, kept for reference.
+
+Thanks to **mietekn** on the OpenWrt forum for pointing at that PR.
 
 ---
 
@@ -46,7 +58,7 @@ patch-set form of the same changes, kept for reference.
 | WiFi 2.4 GHz | IPQ5018 built-in (`c000000.wifi`), ath11k |
 | WiFi 5 GHz | QCN6122 (`b00a040.wifi`), ath11k multipd, userpd 2 |
 | Switch | Realtek **RTL8367S** on MDIO1, DSA (`rtl8365mb`) |
-| CPU to switch | SGMII **1 Gbit** on switch port 6 |
+| CPU to switch | **2.5 Gbit** (`2500base-x`) on switch port 6 |
 | Serial | 115200 8N1, `blsp1_uart1` @ 0x78af000 |
 
 The unit's own `product-info` in the `tp_data` partition reads `product_name:MR3000X`,
@@ -56,7 +68,8 @@ are byte-identical, so the naming ambiguity does not matter in practice.
 ## Status
 
 Working: both radios, DSA switch with `wan`/`lan1`/`lan2`/`lan3`, LuCI, sysupgrade, boot from
-NAND, serial console (in and out), per-unit WiFi calibration read from flash at runtime.
+NAND, serial console (in and out), per-unit WiFi calibration and MAC addresses read from flash
+at runtime, 2.5 Gbit CPU port.
 
 About 50 MB RAM free with both radios up. 5 GHz throughput is roughly 350 Mbit with both cores
 saturated, since mainline ath11k has no NSS offload for IPQ5018.
@@ -69,7 +82,7 @@ Ports and LEDs are confirmed on hardware:
 | `port@1` | LAN1 | `green:lan-1` | 33 |
 | `port@2` | LAN2 | `green:lan-2` | 11 |
 | `port@3` | LAN3 | `green:lan-3` | 32 |
-| `port@6` | CPU, SGMII 1 Gbit | | |
+| `port@6` | CPU, 2.5 Gbit | | |
 
 Plus a two-colour status LED on GPIO 13 (green) and GPIO 12 (orange), wired to
 `led-running`/`led-upgrade` and `led-boot`/`led-failsafe` respectively.
@@ -79,34 +92,41 @@ the GPL sources, which reads as wan, lan1, lan2, lan3, status green, status oran
 
 ---
 
-## Before you flash this
+## Where the MAC address comes from
 
-**The MAC address is hard-coded** in `ipq5018-mr80x-v2.dts`:
+There is **no MAC address anywhere in the device tree**. The images are not tied to one
+particular unit, so the prebuilt ones can be flashed as they are.
 
-```dts
-&gmac1 { local-mac-address = [08 8a f1 39 98 c0]; };   /* lan / label */
-port@0 { local-mac-address = [08 8a f1 39 98 c1]; };   /* wan */
-&gmac0 { local-mac-address = [08 8a f1 39 98 c4]; };   /* unused */
-```
+`0:art` on this device contains no MAC. Those bytes read `0xff`, and U-Boot says so itself:
+`eth0 MAC Address from ART is not valid`. Do not wire `nvmem-cells` to it. The factory address
+lives in the `tp_data` UBIFS volume, file `default-mac`, as six raw bytes.
 
-and the radios derive theirs from the label MAC (`+2` and `+3`) in the caldata hotplug script.
-If you flash the prebuilt image unchanged, your router will use my unit's MAC addresses.
+A preinit hook mounts that volume read-only and `board.d/02_network` hands the addresses out:
 
-Your own MAC lives in the `tp_data` UBI volume, file `default-mac`, as six raw bytes. Once
-OpenWrt is running you can read it with:
+| Interface | Address |
+|---|---|
+| `eth1`, `lan1`..`lan3`, `br-lan`, label | base |
+| `wan` | base + 1 |
+| `phy0` (2.4 GHz) | base + 2 |
+| `phy1` (5 GHz) | base + 3 |
+| `eth0` (unused second GMAC) | base + 4 |
+
+Two things are worth knowing if you adapt this:
+
+The bridge needs `ucidef_set_bridge_mac`, not `ucidef_set_network_device_mac`. jshn stores JSON
+keys as shell variable names, so `br-lan` ends up in `board.json` as `br_lan` and netifd never
+matches it. Everything else looks right while `br-lan` quietly takes a fresh random address on
+every boot.
+
+`eth0` keeps the bootloader's `00:11:22:33:44:55` in practice. The correct value is in
+`board.json`, but netifd only applies it once the device appears in a network configuration, and
+that port is unused here.
+
+You can read your own address at any time with:
 
 ```sh
-ubiattach -m 13
-mount -t ubifs ubi1:tp_data /mnt -o ro
-hexdump -C /mnt/default-mac
+hexdump -C /tmp/tp_data/default-mac
 ```
-
-Then put `<mac>`, `<mac>+1` and `<mac>+4` into the three lines above and rebuild. Reading it at
-runtime instead, from `02_network` as the reference fork does, is the obvious next improvement
-and the main reason this is not upstream-ready.
-
-`0:art` on this device contains **no** MAC. Those bytes read `0xff`, and U-Boot says so itself:
-`eth0 MAC Address from ART is not valid`. Do not wire `nvmem-cells` to it.
 
 ---
 
@@ -351,26 +371,32 @@ Do not be misled by the OEM device tree's `//soc/mdio@90000 phy-reset-gpio = <0x
 (GPIO 39). That is the MDIO/PHY reset and belongs on the bus node. It is a different pin for a
 different job.
 
-### 3. The CPU link must be 1 Gbit SGMII, not 2.5 Gbit HSGMII
+### 3. The CPU link at 2.5 Gbit, and why it looked broken
 
 ```dts
-&gmac1   { phy-mode = "sgmii"; fixed-link { speed = <1000>; full-duplex; }; };
+&gmac1   { phy-mode = "2500base-x"; fixed-link { speed = <2500>; full-duplex; }; };
 &uniphy0 { assigned-clock-rates = <UNIPHY_REFCLK_25MHZ>; };
-port@6   { phy-mode = "sgmii"; fixed-link { speed = <1000>; full-duplex; }; };
+port@6   { phy-mode = "2500base-x"; fixed-link { speed = <2500>; full-duplex; }; };
 ```
 
-U-Boot configures the switch for 2.5 Gbit (`Set RTL8367S SGMII 2.5Gbps`) and the OEM runs it
-that way, but at 3.125 GBaud this board loses packets:
+**This section used to say the opposite.** For a long time the port had to run at 1 Gbit here,
+because at 2.5 Gbit the board lost 4 to 13 percent of frames:
 
-| | 2.5G HSGMII | 1G SGMII |
-|---|---|---|
-| ping 32 B, 50 packets | 6 % loss | 0 % |
-| ping 1400 B DF, 50 packets | 4 to 13 % loss | 0 % |
-| 20 x HTTP GET | 8 to 11 of 20 | 20 of 20 |
+| | 2.5G, before | 1G | 2.5G, now |
+|---|---|---|---|
+| ping 32 B | 6 % loss | 0 % | 0 % |
+| ping 1400 B DF | 4 to 13 % loss | 0 % | 0 % |
+| bulk transfer | 8 to 11 of 20 HTTP GETs | 20 of 20 | 90 MB, no errors |
 
-The loss is invisible in every counter. `/proc/net/dev` shows `errs 0 drop 0 fifo 0` on the
-conduit, because frames mangled on the SerDes are discarded by the PCS layer before the MAC
-ever sees a frame. 1 Gbit is ample, the radios do about 350 Mbit.
+The cause was not the board and not the baud rate. The SerDes PLL needs about 98 ms to settle
+after the data-path reset, which the vendor firmware waits out and the driver did not. With
+`714-02` from [#24197](https://github.com/openwrt/openwrt/pull/24197) applied, 2.5 Gbit is clean:
+69,000 packets each way with zero errors, zero CRC errors and zero drops.
+
+What made this so easy to misdiagnose is that the loss is invisible in every counter.
+`/proc/net/dev` shows `errs 0 drop 0 fifo 0` on the conduit, because frames mangled on the SerDes
+are discarded by the PCS layer before the MAC ever sees a frame. It really does look like the
+link speed is simply too much for the hardware.
 
 The switch port is **6** (`extints` in `rtl8365mb_main.c` lists port 6 as the SGMII/HSGMII
 external interface for the RTL8367S), and the switch node needs a child

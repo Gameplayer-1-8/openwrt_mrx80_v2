@@ -2,34 +2,46 @@ From: OpenWrt MR80X v2 port
 Subject: mtd: spinand: esmt: do not register the OTP areas
 
 Kernel 6.18 added OTP support for the ESMT F50L1G41LB and F50D1G41LB. On the
-Mercusys MR80X v2 (IPQ5018, QPIC SPI NAND) that support bricks all flash access.
+Mercusys MR80X v2 (IPQ5018, QPIC SPI NAND) registering those areas makes the
+SPI NAND unusable, in two separate ways.
 
-Declaring SPINAND_USER_OTP_INFO/SPINAND_FACT_OTP_INFO makes spinand_init()
-call spinand_set_mtd_otp_ops(), and MTD registration then creates the
-user-otp and factory-otp nvmem devices. The resulting OTP access leaves
-CFG_OTP_ENABLE set on the chip while the driver's cfg_cache says it is clear.
-Because spinand_upd_cfg() skips the register write whenever the cached value
-already matches, every later attempt to leave OTP mode becomes a no-op, and
-no warning is printed.
+The first one has a proper fix elsewhere. qcom_spi_send_cmdaddr() used to run
+the command before qcom_spi_io_op() wrote the value into NAND_FLASH_FEATURES,
+so every SET_FEATURE landed one operation late. spinand_otp_rw() enables OTP
+mode, reads, and disables it again, and mtd_otp_nvmem_add() does exactly that
+during MTD registration, so the "disable" wrote the previously requested value
+and CFG_OTP_ENABLE stayed set. The chip then serves its OTP area instead of the
+array: page 0 returns the unique ID page, page 1 the ONFI parameter page,
+everything above reads as 0xff. Reads report no error, because the hardware
+erased-page detector legitimately flags those pages as blank, and writes fail
+with -EIO. It looks exactly like a wiped flash while the content is untouched.
 
-From then on the chip serves its OTP area instead of the array: page 0 returns
-the unique ID page, page 1 the ONFI parameter page, everything above reads as
-0xff. Reads report no error because the hardware erased-page detector
-legitimately flags those pages as blank, and writes fail with -EIO. The effect
-looks exactly like a wiped or unreadable flash, which is what made this hard
-to spot. Observed on the device:
+That off-by-one is fixed by "spi: spi-qpic-snand: write the feature value
+before executing SET_FEATURE" from openwrt/openwrt#24197, which this tree also
+carries. Measured here before that fix:
 
-  spinanddbg: cfg as found at probe = 00 (otp_en=0)   first probe, chip is clean
-  spinanddbg: cfg as found at probe = 40 (otp_en=1)   second probe, OTP left on
-  spinanddbg: OTP off: cached=00 chip=40 -> chip=00   cache and chip disagree
+  cfg as found at probe = 00 (otp_en=0)   first probe, chip is clean
+  cfg as found at probe = 40 (otp_en=1)   second probe, OTP was left on
+  OTP off: cached=00 chip=40 -> chip=00   cache and chip disagree
 
-Forcing the register write restores normal operation immediately and the flash
-content is intact, so nothing is damaged, it is purely a mode the chip is left
-in. 6.12 is unaffected because it carries no OTP support for these parts.
+The second one is why this patch is still needed. With the SET_FEATURE fix in
+place and the OTP declarations restored, the spinand probe fails outright, four
+milliseconds after the chip is identified:
 
-Drop the OTP declarations for both ESMT entries. The feature is not used on
-this hardware and the rest of the chip support is unchanged.
+  spi-nand spi0.0: ESMT SPI NAND was found.
+  spi-nand spi0.0: 128 MiB, block size: 128 KiB, page size: 2048, OOB size: 64
+  spi-nand spi0.0: probe with driver spi-nand failed with error -512
 
+No MTD device is created at all, so there are no partitions, no calibration
+data and no sysupgrade. It reproduces on a manual driver rebind, so it is not a
+timing race. Dropping the OTP declarations makes it probe cleanly every time.
+Why the registration returns -ERESTARTSYS on this board is not established; one
+difference against the TP-Link Archer AX55 v1, which runs the same silicon with
+OTP enabled, is that this device tree hangs an nvmem-layout off the 0:art
+partition for the WiFi calibration data.
+
+The feature is unused on this hardware and the rest of the chip support is
+untouched. 6.12 is unaffected because it carries no OTP support for these parts.
 --- a/drivers/mtd/nand/spi/esmt.c
 +++ b/drivers/mtd/nand/spi/esmt.c
 @@ -208,9 +208,7 @@
