@@ -35,8 +35,21 @@ NAND, serial console (in and out), per-unit WiFi calibration read from flash at 
 About 50 MB RAM free with both radios up. 5 GHz throughput is roughly 350 Mbit with both cores
 saturated, since mainline ath11k has no NSS offload for IPQ5018.
 
-Not done: LED-to-port mapping and which socket is WAN are taken from the reference fork and
-the GPL sources but have **not** been physically confirmed.
+Ports and LEDs are confirmed on hardware:
+
+| DSA port | Socket | LED | GPIO |
+|---|---|---|---|
+| `port@0` | WAN | `green:wan` | 10 |
+| `port@1` | LAN1 | `green:lan-1` | 33 |
+| `port@2` | LAN2 | `green:lan-2` | 11 |
+| `port@3` | LAN3 | `green:lan-3` | 32 |
+| `port@6` | CPU, SGMII 1 Gbit | | |
+
+Plus a two-colour status LED on GPIO 13 (green) and GPIO 12 (orange), wired to
+`led-running`/`led-upgrade` and `led-boot`/`led-failsafe` respectively.
+
+The GPIO order matches `ALL_LED=10,33,11,32,13,12` from the MR3000Xv2 product configuration in
+the GPL sources, which reads as wan, lan1, lan2, lan3, status green, status orange.
 
 ---
 
@@ -363,13 +376,6 @@ Re-muxing gpio20/21 in Linux kills console RX. TX keeps working because `printk`
 the port looks healthy while not a single RX interrupt arrives. The mux *value* is not wrong,
 `blsp0_uart0` is legal for both pins. It is the pin configuration Linux writes. Inheriting
 U-Boot's setup works.
-
-### Bonus: measuring from WSL will lie to you
-
-Every network measurement taken from WSL in this port was misleading, with SSH stalling at
-"banner exchange" and phantom large-packet loss, because WSL2 NATs through the Windows host.
-Measure from the host instead. And on a flaky link a single successful probe proves nothing:
-the packet loss above only became visible over 20 to 50 repetitions.
 
 ---
 
