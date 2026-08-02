@@ -1,0 +1,452 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+// Device: MERCUSYS MR80X v2
+// SoC: Qualcomm IPQ5018 (IPQ0509)
+// Switch: Realtek RTL8367S
+// WLAN: IPQ5018 (2.4GHz) + QCN6122 (5GHz)
+// Flash: 128MB SD-NAND
+// RAM: 256MB
+
+/dts-v1/;
+
+#include "ipq5018.dtsi"
+#include "ipq5018-ess.dtsi"
+#include "ipq5018-qcn6122.dtsi"
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+/ {
+	model = "MERCUSYS MR80X v2";
+	compatible = "mercusys,mr80x-v2", "qcom,ipq5018";
+
+	aliases {
+		label-mac-device = &gmac1;
+
+		led-boot = &led_sys_orange;
+		led-failsafe = &led_sys_orange;
+		led-running = &led_sys_green;
+		led-upgrade = &led_sys_green;
+
+		serial0 = &blsp1_uart1;
+	};
+
+	chosen {
+		bootargs-append = " root=/dev/ubiblock0_1 swiotlb=1 coherent_pool=2M";
+		stdout-path = "serial0:115200n8";
+	};
+
+	keys {
+		compatible = "gpio-keys";
+		pinctrl-0 = <&button_pins>;
+		pinctrl-names = "default";
+
+		button-reset {
+			label = "reset";
+			gpios = <&tlmm 14 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+		};
+
+		button-wps {
+			label = "wps";
+			gpios = <&tlmm 16 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_WPS_BUTTON>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		pinctrl-0 = <&led_pins>;
+		pinctrl-names = "default";
+
+		/* GPL product config for MR3000Xv2 lists ALL_LED=10,33,11,32,13,12,
+		 * i.e. wan, lan1, lan2, lan3, sys_green, sys_orange - which is exactly
+		 * the mapping the working yanko-yankulov fork uses. An earlier revision
+		 * of this file had gpio32/33 as WiFi LEDs; that was wrong. */
+
+		led_wan: led-wan {
+			gpios = <&tlmm 10 GPIO_ACTIVE_HIGH>;
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_WAN;
+		};
+
+		led_lan1: led-lan1 {
+			gpios = <&tlmm 33 GPIO_ACTIVE_HIGH>;
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_LAN;
+			function-enumerator = <1>;
+		};
+
+		led_lan2: led-lan2 {
+			gpios = <&tlmm 11 GPIO_ACTIVE_HIGH>;
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_LAN;
+			function-enumerator = <2>;
+		};
+
+		led_lan3: led-lan3 {
+			gpios = <&tlmm 32 GPIO_ACTIVE_HIGH>;
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_LAN;
+			function-enumerator = <3>;
+		};
+
+		led_sys_green: led-status-green {
+			gpios = <&tlmm 13 GPIO_ACTIVE_HIGH>;
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_STATUS;
+		};
+
+		led_sys_orange: led-status-orange {
+			gpios = <&tlmm 12 GPIO_ACTIVE_HIGH>;
+			color = <LED_COLOR_ID_ORANGE>;
+			function = LED_FUNCTION_STATUS;
+			default-state = "on";
+		};
+	};
+};
+
+&sleep_clk {
+	clock-frequency = <32000>;
+};
+
+&xo_board_clk {
+	clock-div = <4>;
+	clock-mult = <1>;
+};
+
+&blsp1_uart1 {
+	status = "okay";
+
+	/* Deliberately no pinctrl. Re-muxing gpio20/21 here kills console RX:
+	 * TX keeps working because printk busy-polls, but not a single RX
+	 * interrupt arrives. Verified on hardware - dropping pinctrl restores
+	 * input immediately. U-Boot already sets these pins up correctly, and
+	 * the working yanko-yankulov fork also omits pinctrl here. */
+};
+
+&prng {
+	status = "okay";
+};
+
+&qfprom {
+	status = "okay";
+};
+
+&qpic_bam {
+	status = "okay";
+};
+
+&qpic_nand {
+	pinctrl-0 = <&qpic_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+
+	nand@0 {
+		compatible = "spi-nand";
+		reg = <0>;
+
+		nand-ecc-engine = <&qpic_nand>;
+		nand-ecc-step-size = <512>;
+		nand-ecc-strength = <4>;	/* F50D1G41LB is a 4-bit ECC part - U-Boot prints
+					 * "ECC:4-bit". Decoding with <8> returns data that
+					 * looks clean but has silently flipped bits, which
+					 * corrupts caldata read from 0:art and breaks UBI
+					 * on tp_data. */
+		nand-bus-width = <8>;
+
+		partitions {
+			compatible = "qcom,smem-part";
+
+			partition-art {
+				label = "0:art";
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					macaddr_art_0: mac-address@0 {
+						compatible = "mac-base";
+						reg = <0x0 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
+
+					macaddr_art_6: mac-address@6 {
+						compatible = "mac-base";
+						reg = <0x6 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
+
+					macaddr_art_c: mac-address@c {
+						compatible = "mac-base";
+						reg = <0xc 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
+
+					macaddr_art_12: mac-address@12 {
+						compatible = "mac-base";
+						reg = <0x12 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
+				};
+			};
+		};
+	};
+};
+
+/*
+ * ========================================================================
+ *     _______________________         _______________________
+ *    |        IPQ5018        |       |       RTL8367S        |
+ *    | +------+   +--------+ |       | +--------+   +------+ |
+ *    | | MAC0 |---| GE Phy |-+-PHY---+-|  Phy4  |---| P4   | |
+ *    | +------+   +--------+ |       | +--------+   +------+ |
+ *    | +------+   +--------+ |       | +--------+   +------+ |
+ *    | | MAC1 |---| Uniphy |-+-SGMII-+-| SerDes |---| P5   | |
+ *    | +------+   +--------+ |       | +--------+   +------+ |
+ *    |_______________________|       |_______________________|
+ *
+ *    RTL8367S Ports: P0=LAN1, P1=LAN2, P2=LAN3, P3=WAN
+ *    P4=IPQ GePhy (internal), P5=SGMII CPU port
+ * ========================================================================
+ */
+
+&uniphy0 {
+	status = "okay";
+
+	assigned-clocks = <&uniphy0 UNIPHY_CLK_REF>;
+	assigned-clock-rates = <UNIPHY_REFCLK_25MHZ>;
+};
+
+/* MAC0 -> GE Phy -> RTL8367S Port 4 */
+&gmac0 {
+	status = "okay";
+
+	local-mac-address = [08 8a f1 39 98 c4];
+};
+
+/* MAC1 -> SGMII -> RTL8367S Port 5 (CPU port) */
+&gmac1 {
+	status = "okay";
+
+	/* This unit has no usable factory data in 0:art - those bytes read 0xff and
+	 * U-Boot itself reports "MAC Address from ART is not valid". The real MAC was
+	 * recovered from the tp_data UBIFS (dentry default-mac, inode 69) and is set
+	 * statically below. */
+	local-mac-address = [08 8a f1 39 98 c0];
+
+	phy-mode = "sgmii";
+
+	fixed-link {
+		speed = <1000>;
+		full-duplex;
+	};
+};
+
+&mdio0 {
+	status = "okay";
+};
+
+&ge_phy {
+	qcom,dac-preset-short-cable;
+};
+
+&mdio1 {
+	status = "okay";
+
+	pinctrl-0 = <&mdio1_pins>;
+	pinctrl-names = "default";
+	/* GPIO 39, matching the OEM DTB: //soc/mdio@90000 phy-reset-gpio =
+	 * <0x06 0x27 0x00>. Belongs on the bus node, not the switch node. */
+	reset-gpios = <&tlmm 39 GPIO_ACTIVE_LOW>;
+
+	/* RTL8367S (chip_ver 0x00A0). Its external interface 1 is on port 6 and
+	 * supports both SGMII and HSGMII. U-Boot sets it to HSGMII on every boot
+	 * ("Set RTL8367S SGMII 2.5Gbps"), but 3.125 GBaud is not reliable on this
+	 * board: measured 4-13 %% packet loss with every MAC counter at zero,
+	 * because frames mangled on the SerDes are dropped by the PCS layer before
+	 * the MAC sees a frame. Plain 1G SGMII measures 0 %% loss and is plenty -
+	 * the radios do ~350 Mbit. Both ends are set below and in &gmac1.
+	 *
+	 * The child "realtek,smi-mdio" node is mandatory - without it the driver
+	 * finds the chip but aborts with "no MDIO bus node" / -ENODEV. */
+	switch1: ethernet-switch@1d {
+		compatible = "realtek,rtl8365mb";
+		reg = <29>;
+
+		/* Switch reset, active low. Verified on hardware: driving gpio26 low
+		 * then high makes a previously silent chip answer immediately.
+		 * Needed because U-Boot only runs rtk_switch_init when it drops to
+		 * its prompt - on the autoboot path into NAND the switch is never
+		 * taken out of reset, so MDIO reads return 0xffff forever.
+		 * Not to be confused with gpio39 on the bus node above, which is the
+		 * MDIO/PHY reset the OEM DTB documents. */
+		reset-gpios = <&tlmm 26 GPIO_ACTIVE_LOW>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		mdio {
+			compatible = "realtek,smi-mdio";
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			ethphy0: ethernet-phy@0 {
+				reg = <0>;
+			};
+
+			ethphy1: ethernet-phy@1 {
+				reg = <1>;
+			};
+
+			ethphy2: ethernet-phy@2 {
+				reg = <2>;
+			};
+
+			ethphy3: ethernet-phy@3 {
+				reg = <3>;
+			};
+		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				label = "wan";
+				phy-handle = <&ethphy0>;
+
+				local-mac-address = [08 8a f1 39 98 c1];
+			};
+
+			port@1 {
+				reg = <1>;
+				label = "lan1";
+				phy-handle = <&ethphy1>;
+			};
+
+			port@2 {
+				reg = <2>;
+				label = "lan2";
+				phy-handle = <&ethphy2>;
+			};
+
+			port@3 {
+				reg = <3>;
+				label = "lan3";
+				phy-handle = <&ethphy3>;
+			};
+
+			port@6 {
+				reg = <6>;
+				label = "cpu";
+				ethernet = <&gmac1>;
+				phy-mode = "sgmii";
+
+				fixed-link {
+					speed = <1000>;
+					full-duplex;
+				};
+			};
+		};
+	};
+};
+
+&tlmm {
+	button_pins: button-state {
+		button-pins {
+			pins = "gpio14", "gpio16";
+			function = "gpio";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+	};
+
+	led_pins: led-state {
+		pins = "gpio10", "gpio11", "gpio12", "gpio13", "gpio32", "gpio33";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-down;
+	};
+
+	mdio1_pins: mdio-state {
+		mdc-pins {
+			pins = "gpio36";
+			function = "mdc";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+
+		mdio-pins {
+			pins = "gpio37";
+			function = "mdio";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+	};
+
+	qpic_pins: qpic-state {
+		clock-pins {
+			pins = "gpio9";
+			function = "qspi_clk";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		cs-pins {
+			pins = "gpio8";
+			function = "qspi_cs";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		data-pins {
+			pins = "gpio4", "gpio5", "gpio6", "gpio7";
+			function = "qspi_data";
+			drive-strength = <8>;
+			bias-disable;
+		};
+	};
+
+	serial_0_pins: uart0-state {
+		pins = "gpio20", "gpio21";
+		function = "blsp0_uart0";
+		drive-strength = <8>;
+		bias-disable;
+	};
+};
+
+&q6v5_wcss {
+	status = "okay";
+
+	/* Exact value from the OEM DTB and the working yanko-yankulov fork:
+	 *   <0x1 4 3 0x0f 0 0>  PCIE0 (pcie@a0000000, PERST gpio15) -> UPD3
+	 *   <0x2 4 2 0x1b 0 0>  PCIE1 (pcie@80000000, PERST gpio27) -> UPD2 [QCN6122] */
+	boot-args = <0x01 0x04 0x03 0x0f 0x00 0x00 0x02 0x04 0x02 0x1b 0x00 0x00>;
+};
+
+&wifi {
+	/* IPQ5018 2.4GHz */
+	status = "okay";
+
+	qcom,rproc = <&q6_wcss_pd1>;
+	qcom,ath11k-calibration-variant = "MERCUSYS-MR80X-V2";
+	/* Use memory mode 2 to save RAM on 256MB device */
+	qcom,ath11k-fw-memory-mode = <1>;
+	qcom,bdf-addr = <0x4c400000>;
+};
+
+&wifi1 {
+	/* QCN6122 5GHz */
+	status = "okay";
+
+	qcom,rproc = <&q6_wcss_pd2>;
+	qcom,userpd-subsys-name = "q6v5_wcss_userpd2";
+	qcom,ath11k-calibration-variant = "MERCUSYS-MR80X-V2";
+	/* Use memory mode 2 to save RAM on 256MB device */
+	qcom,ath11k-fw-memory-mode = <1>;
+	qcom,bdf-addr = <0x4d100000>;
+	qcom,m3-dump-addr = <0x4df00000>;
+};

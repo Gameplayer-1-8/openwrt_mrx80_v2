@@ -1,0 +1,9 @@
+# Never commit device dumps. They contain the complete OEM firmware (copyright) and
+# per-unit identity data: MAC address, WPS PIN, device-id.
+nand_backup*.bin
+tp_data*.bin
+art*.bin
+radio.bin
+caldata_*.bin
+*.dts.bak
+*.dts.orig

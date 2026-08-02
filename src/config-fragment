@@ -1,0 +1,5 @@
+# beyond the target defaults
+CONFIG_PACKAGE_kmod-dsa-rtl8365mb=y
+CONFIG_PACKAGE_kmod-mdio-gpio=y
+CONFIG_PACKAGE_ethtool=y
+CONFIG_PACKAGE_luci=y

@@ -1,0 +1,2 @@
+775ba1dbccadabfba41360f04923e02a57dea30485163183b4d34527ccfdc116  openwrt-qualcommax-ipq50xx-mercusys_mr80x-v2-squashfs-sysupgrade.bin
+e3fdd836b8675818fdfc9ad1b5a004540ab1b1b53b573fe561018978cdc3d497  openwrt-qualcommax-ipq50xx-mercusys_mr80x-v2-initramfs-uImage.itb

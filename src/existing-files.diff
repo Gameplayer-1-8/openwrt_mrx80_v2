@@ -1,0 +1,144 @@
+diff --git a/package/firmware/ipq-wifi/Makefile b/package/firmware/ipq-wifi/Makefile
+index 78d4abf..5e7034d 100644
+--- a/package/firmware/ipq-wifi/Makefile
++++ b/package/firmware/ipq-wifi/Makefile
+@@ -36,6 +36,7 @@ ALLWIFIBOARDS:= \
+ 	buffalo_wxr-5950ax12 \
+ 	cambiumnetworks_xe34 \
+ 	cmcc_mr3000d-ci \
++	mercusys_mr80x-v2 \
+ 	cmcc_rm2-6 \
+ 	compex_wpq873 \
+ 	dynalink_dl-wrx36 \
+@@ -198,8 +199,12 @@ This is package is only necessary for the $(2).
+ Do not install it for any other device!
+   endef
+ 
+-  define Package/ipq-wifi-$(1)/install-overlay
+-    $$$$(foreach IPQ_WIFI_BOARD_FILE,$$$$(wildcard $(PKG_BUILD_DIR)/board-$(1).*),\
++  # Local deviation from upstream: board data normally comes from the qca-wireless
++  # git source, so a device whose BDF is not upstream yet has no way to ship one.
++  # Also install (not install-overlay) so the files land in the squashfs.
++  # The clean fix is to submit the board data to qca-wireless.
++  define Package/ipq-wifi-$(1)/install
++    $$$$(foreach IPQ_WIFI_BOARD_FILE,$$$$(wildcard $(PKG_BUILD_DIR)/board-$(1).* $(TOPDIR)/package/firmware/ipq-wifi/files/board-$(1).* $(TOPDIR)/package/firmware/ipq-wifi/board-$(1).*),\
+       $$$$(call ipq-wifi-install-one,$$$$(IPQ_WIFI_BOARD_FILE),$$(1)))
+   endef
+ 
+@@ -233,6 +238,7 @@ $(eval $(call generate-ipq-wifi-package,asus_rt-ax89x,Asus RT-AX89X))
+ $(eval $(call generate-ipq-wifi-package,buffalo_wxr-5950ax12,Buffalo WXR-5950AX12))
+ $(eval $(call generate-ipq-wifi-package,cambiumnetworks_xe34,Cambium Networks XE3-4))
+ $(eval $(call generate-ipq-wifi-package,cmcc_mr3000d-ci,CMCC MR3000D-CI))
++$(eval $(call generate-ipq-wifi-package,mercusys_mr80x-v2,MERCUSYS MR80X v2))
+ $(eval $(call generate-ipq-wifi-package,cmcc_rm2-6,CMCC RM2-6))
+ $(eval $(call generate-ipq-wifi-package,compex_wpq873,Compex WPQ-873))
+ $(eval $(call generate-ipq-wifi-package,dynalink_dl-wrx36,Dynalink DL-WRX36))
+diff --git a/target/linux/qualcommax/image/ipq50xx.mk b/target/linux/qualcommax/image/ipq50xx.mk
+index c62bb98..5684553 100644
+--- a/target/linux/qualcommax/image/ipq50xx.mk
++++ b/target/linux/qualcommax/image/ipq50xx.mk
+@@ -284,3 +284,21 @@ define Device/zyxel_scr50axe
+ 		ipq-wifi-zyxel_scr50axe
+ endef
+ TARGET_DEVICES += zyxel_scr50axe
++
++define Device/mercusys_mr80x-v2
++	$(call Device/FitImageLzma)
++	$(call Device/UbiFit)
++	DEVICE_VENDOR := MERCUSYS
++	DEVICE_MODEL := MR80X
++	DEVICE_VARIANT := v2
++	DEVICE_DTS_CONFIG := config@mp02.1
++	SOC := ipq5018
++	BLOCKSIZE := 128k
++	PAGESIZE := 2048
++	IMAGE_SIZE := 43008k
++	NAND_SIZE := 128m
++	DEVICE_PACKAGES := ath11k-firmware-ipq5018-qcn6122 \
++		ipq-wifi-mercusys_mr80x-v2 \
++		kmod-leds-gpio
++endef
++TARGET_DEVICES += mercusys_mr80x-v2
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds
+index 1d34972..6c9cbdf 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds
+@@ -9,6 +9,12 @@ board_config_update
+ board=$(board_name)
+ 
+ case "$board" in
++mercusys,mr80x-v2)
++	ucidef_set_led_netdev "wan" "WAN" "green:wan" "wan" "link tx rx"
++	ucidef_set_led_netdev "lan1" "LAN1" "green:lan-1" "lan1" "link tx rx"
++	ucidef_set_led_netdev "lan2" "LAN2" "green:lan-2" "lan2" "link tx rx"
++	ucidef_set_led_netdev "lan3" "LAN3" "green:lan-3" "lan3" "link tx rx"
++	;;
+ cmcc,pz-l8|\
+ elecom,wrc-x3000gs2|\
+ elecom,wrc-x3000gst2|\
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
+index 7f3c7db..9eb8f48 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
+@@ -17,6 +17,9 @@ ipq50xx_setup_interfaces()
+ 	glinet,gl-b3000)
+ 		ucidef_set_interfaces_lan_wan "lan1 lan2" "wan"
+ 		;;
++	mercusys,mr80x-v2)
++		ucidef_set_interfaces_lan_wan "lan1 lan2 lan3" "wan"
++		;;
+ 	cmcc,mr3000d-ci|\
+ 	linksys,mx2000|\
+ 	linksys,mx5500|\
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata b/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
+index dbe13c5..ac86b6e 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
+@@ -9,6 +9,16 @@ board=$(board_name)
+ case "$FIRMWARE" in
+ "ath11k/IPQ5018/hw1.0/cal-ahb-c000000.wifi.bin")
+ 	case "$board" in
++	mercusys,mr80x-v2)
++		# 0:art holds no MAC and the caldata only carries the 00:03:7f Atheros
++		# placeholder, so derive one from the label MAC. Verified on hardware:
++		# get_mac_label_dt returns 08:8a:f1:39:98:c0. If it ever returns empty,
++		# the garbage lands at caldata offset 0xe and the firmware asserts in
++		# phyrf_bdf.c:605 - check the alias is a path string, not a phandle.
++		caldata_extract "0:art" 0x1000 0x20000
++		ath11k_patch_mac $(macaddr_add $(get_mac_label_dt) 2) 0
++		ath11k_set_macflag
++		;;
+ 	cmcc,mr3000d-ci)
+ 		caldata_extract "0:art" 0x1000 0x20000
+ 		wlan_mac=$(mtd_get_mac_binary 0:art 12)
+@@ -63,6 +73,16 @@ case "$FIRMWARE" in
+ 	;;
+ "ath11k/QCN6122/hw1.0/cal-ahb-b00a040.wifi.bin")
+ 	case "$board" in
++	mercusys,mr80x-v2)
++		# 0:art holds no MAC and the caldata only carries the 00:03:7f Atheros
++		# placeholder, so derive one from the label MAC. Verified on hardware:
++		# get_mac_label_dt returns 08:8a:f1:39:98:c0. If it ever returns empty,
++		# the garbage lands at caldata offset 0xe and the firmware asserts in
++		# phyrf_bdf.c:605 - check the alias is a path string, not a phandle.
++		caldata_extract "0:art" 0x26800 0x20000
++		ath11k_patch_mac $(macaddr_add $(get_mac_label_dt) 3) 0
++		ath11k_set_macflag
++		;;
+ 	cmcc,mr3000d-ci)
+ 		caldata_extract "0:art" 0x26800 0x20000
+ 		wlan_mac=$(mtd_get_mac_binary 0:art 18)
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
+index 13ccc39..51b0e23 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
++++ b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
+@@ -183,7 +183,8 @@ platform_do_upgrade() {
+ 	cmcc,pz-l8|\
+ 	elecom,wrc-x3000gs2|\
+ 	elecom,wrc-x3000gst2|\
+-	iodata,wn-dax3000gr)
++	iodata,wn-dax3000gr|\
++	mercusys,mr80x-v2)
+ 		local delay
+ 
+ 		delay=$(fw_printenv bootdelay)
