@@ -2,7 +2,7 @@
 
 ## NAND layout
 
-Parsed from the MIBIB with `tools/parse_mibib.py` — this is the authoritative source.
+Parsed from the MIBIB with `tools/parse_mibib.py`. This is the authoritative source.
 
 | Partition | Offset | Size |
 |---|---|---|
@@ -39,7 +39,7 @@ QCN6122 caldata   0x26800   131072 bytes  ->  cal-ahb-b00a040.wifi.bin
 Extracted at runtime by `11-ath11k-caldata`. The caldata carries only the Atheros placeholder
 MAC `00:03:7f:12:34:56`, so the radios' addresses are patched from the label MAC.
 
-**`0:ART` contains no MAC on this device** — those bytes read `0xff`, and U-Boot says
+**`0:ART` contains no MAC on this device.** Those bytes read `0xff`, and U-Boot says
 `eth0 MAC Address from ART is not valid`. Do not wire `nvmem-cells` to it.
 
 ## `tp_data`
@@ -59,14 +59,14 @@ country:DE   hw_ver:00000002   special_id:45550000   product_id:02130002
 ```
 
 If `ubiattach` reports "both volume tables are corrupted", check the ECC strength before
-concluding the partition is damaged — with `nand-ecc-strength = <8>` this volume looks
+concluding the partition is damaged. With `nand-ecc-strength = <8>` this volume looks
 destroyed and mounts fine at `<4>`.
 
 ## Board data files
 
 The `.bXX` suffix on the OEM BDFs is the board_id in hex, and the factory caldata carries the
 same board_id at offset 0x3a: `0x24` for the IPQ5018 region, `0x60` for QCN6122. Comparing the
-caldata byte-wise against each candidate then identifies region and revision — EU/`default`
+caldata byte-wise against each candidate then identifies region and revision: EU/`default`
 matches 99.98 % and 99.95 %, revision `00000001` only ~88 %.
 
 The EU `default` files are byte-identical across MR80X, MR3000X, MR1800X and MR70X
@@ -80,7 +80,7 @@ Serial NAND: ESMT F50D1G41LB, 128 MiB, page 2048, spare 64, ECC 4-bit
 ```
 
 `0:APPSBLENV` has a bad CRC on this unit, so U-Boot falls back to its built-in environment on
-every boot — `ipaddr`/`serverip` have to be set each time unless you `saveenv`.
+every boot, so `ipaddr`/`serverip` have to be set each time unless you `saveenv`.
 
 Note that `Net:` initialisation, which includes `rtk_switch_init` for the RTL8367S, only runs
 when U-Boot falls through to its prompt. Autoboot into NAND never touches the switch. See the

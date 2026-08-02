@@ -3,8 +3,8 @@
 Working OpenWrt port for a Qualcomm IPQ5018 based Mercusys router, built against OpenWrt main
 (`ce16dd8`, kernel 6.12.100). Everything below was verified on real hardware.
 
-> **Read the "Before you use this" section.** The MAC address is currently hard-coded in the
-> DTS for one specific unit. You *will* want to change that.
+> **Read "Before you flash this" first.** The MAC address is currently hard-coded in the DTS
+> for one specific unit. You will want to change that.
 
 ---
 
@@ -20,7 +20,7 @@ Working OpenWrt port for a Qualcomm IPQ5018 based Mercusys router, built against
 | WiFi 2.4 GHz | IPQ5018 built-in (`c000000.wifi`), ath11k |
 | WiFi 5 GHz | QCN6122 (`b00a040.wifi`), ath11k multipd, userpd 2 |
 | Switch | Realtek **RTL8367S** on MDIO1, DSA (`rtl8365mb`) |
-| CPU ↔ switch | SGMII **1 Gbit** on switch port 6 |
+| CPU to switch | SGMII **1 Gbit** on switch port 6 |
 | Serial | 115200 8N1, `blsp1_uart1` @ 0x78af000 |
 
 The unit's own `product-info` in the `tp_data` partition reads `product_name:MR3000X`,
@@ -32,15 +32,15 @@ are byte-identical, so the naming ambiguity does not matter in practice.
 Working: both radios, DSA switch with `wan`/`lan1`/`lan2`/`lan3`, LuCI, sysupgrade, boot from
 NAND, serial console (in and out), per-unit WiFi calibration read from flash at runtime.
 
-~50 MB RAM free with both radios up. 5 GHz throughput is roughly 350 Mbit with both cores
-saturated — mainline ath11k has no NSS offload for IPQ5018 and there is no prospect of one.
+About 50 MB RAM free with both radios up. 5 GHz throughput is roughly 350 Mbit with both cores
+saturated, since mainline ath11k has no NSS offload for IPQ5018.
 
 Not done: LED-to-port mapping and which socket is WAN are taken from the reference fork and
 the GPL sources but have **not** been physically confirmed.
 
 ---
 
-## Before you use this
+## Before you flash this
 
 **The MAC address is hard-coded** in `ipq5018-mr80x-v2.dts`:
 
@@ -51,8 +51,10 @@ port@0 { local-mac-address = [08 8a f1 39 98 c1]; };   /* wan */
 ```
 
 and the radios derive theirs from the label MAC (`+2` and `+3`) in the caldata hotplug script.
+If you flash the prebuilt image unchanged, your router will use my unit's MAC addresses.
 
-Your unit's real MAC lives in the `tp_data` UBI volume, file `default-mac`, as six raw bytes:
+Your own MAC lives in the `tp_data` UBI volume, file `default-mac`, as six raw bytes. Once
+OpenWrt is running you can read it with:
 
 ```sh
 ubiattach -m 13
@@ -60,21 +62,121 @@ mount -t ubifs ubi1:tp_data /mnt -o ro
 hexdump -C /mnt/default-mac
 ```
 
-Replace the three values above with `<mac>`, `<mac>+1` and `<mac>+4`. Doing this properly at
-runtime (reading `tp_data` from `02_network`, as the reference fork does) is the obvious next
-improvement and is the main reason this is not upstream-ready.
+Then put `<mac>`, `<mac>+1` and `<mac>+4` into the three lines above and rebuild. Reading it at
+runtime instead, from `02_network` as the reference fork does, is the obvious next improvement
+and the main reason this is not upstream-ready.
 
-`0:art` on this device contains **no** MAC — those bytes read `0xff`, and U-Boot says so itself
-(`eth0 MAC Address from ART is not valid`). Do not wire `nvmem-cells` to it.
+`0:art` on this device contains **no** MAC. Those bytes read `0xff`, and U-Boot says so itself:
+`eth0 MAC Address from ART is not valid`. Do not wire `nvmem-cells` to it.
 
 ---
 
 ## Installation
 
-Recovery is always available over TFTP because sysupgrade never touches `0:SBL1` or `0:APPSBL`,
-so U-Boot survives whatever you do to the rootfs.
+Nothing here is a one-way door. `sysupgrade` never touches `0:SBL1` or `0:APPSBL`, so U-Boot
+always survives and you can TFTP a working image back at any time.
 
-**1. Try it from RAM first.** Interrupt autoboot to get the `IPQ5018#` prompt:
+### What you need
+
+* A USB-to-UART adapter, **3.3 V TTL**. Not RS-232, and never 5 V. See the warning in step 1,
+  a 5 V adapter will destroy the SoC.
+* An Ethernet cable between your PC and one of the router's LAN sockets.
+* A TFTP server on your PC. On Windows, tftpd64 is the usual choice.
+* Terminal software: PuTTY or TeraTerm on Windows, `screen` or `picocom` on Linux.
+
+### 1. Serial console
+
+> ### The adapter must be 3.3 V
+>
+> **A 5 V adapter will destroy the SoC.** The IPQ5018 UART pins are 3.3 V only and are not
+> 5 V tolerant. There is no protection on these pads and the damage is immediate and permanent.
+>
+> Many cheap USB-to-serial adapters ship with a jumper or a solder bridge for 3.3 V / 5 V.
+> Check it before you connect anything, and measure the TX pin against GND with a multimeter
+> if you are not certain. It must read about 3.3 V, not 5 V.
+>
+> FTDI, CP2102 and CH340 boards are all available in 3.3 V versions. Avoid anything sold as an
+> "RS-232 cable", that runs at plus/minus 12 V and is a different thing entirely.
+
+The UART header sits at the front right of the PCB when you look at the board from the rear,
+that is from the side the LAN sockets are on. The pads are labelled **RX**, **TX** and **GND**
+on the silkscreen, so no probing is needed.
+
+Connect those three and nothing else. Leave any VCC pad unconnected, the board powers itself.
+The labels are from the board's point of view, so the connection is crossed:
+
+```
+adapter TX  ->  board RX
+adapter RX  ->  board TX
+adapter GND ->  board GND
+```
+
+If you get no output at all, swapping TX and RX is the first thing to try. It cannot damage
+anything.
+
+Port settings:
+
+```
+115200 baud, 8 data bits, no parity, 1 stop bit, no flow control
+```
+
+In PuTTY: connection type **Serial**, serial line `COMx`, speed `115200`, and under
+*Connection > Serial* set flow control to **None**. On Linux, `screen /dev/ttyUSB0 115200`.
+
+You should see U-Boot output as soon as you power the router on.
+
+### 2. Give your PC a static IP
+
+The router uses `192.168.1.1` in U-Boot, so put your PC on `192.168.1.10`.
+
+**Windows:** *Settings > Network & Internet > Ethernet > Edit IP assignment > Manual*, switch
+IPv4 on, then:
+
+```
+IP address       192.168.1.10
+Subnet mask      255.255.255.0
+Gateway          leave empty
+```
+
+The older route works too: *Control Panel > Network Connections*, right-click the adapter,
+*Properties > Internet Protocol Version 4 > Properties*.
+
+**Linux:**
+
+```sh
+sudo ip addr add 192.168.1.10/24 dev eth0
+sudo ip link set eth0 up
+```
+
+Set the adapter back to DHCP when you are done.
+
+### 3. Set up tftpd64
+
+Download it from <https://pjo2.github.io/tftpd64/>, unpack it and run `tftpd64.exe`. No
+installation needed.
+
+1. Put both images from `images/` into one folder.
+2. **Current Directory:** browse to that folder.
+3. **Server interfaces:** select `192.168.1.10`. If several are offered, pick exactly this one,
+   otherwise the router will not reach the server.
+4. Switch to the **Tftp Server** tab and leave the window open while you work.
+
+If the transfer later times out, the Windows firewall is the usual reason. Allow `tftpd64.exe`
+for private networks, or switch the firewall off for the duration.
+
+On Linux any TFTP daemon will do, for example:
+
+```sh
+sudo dnsmasq --enable-tftp --tftp-root=/path/to/images --port=0 -i eth0 -d
+```
+
+### 4. Boot the initramfs image over TFTP
+
+This runs entirely from RAM and writes nothing to flash. A power cycle gets you back to
+whatever was there before, so it is a safe way to try the port first.
+
+Power on the router and **press a key immediately** in the serial terminal. The autoboot delay
+is only one second. You are aiming for the `IPQ5018#` prompt.
 
 ```
 setenv ipaddr 192.168.1.1
@@ -83,25 +185,90 @@ tftpboot 0x44000000 openwrt-qualcommax-ipq50xx-mercusys_mr80x-v2-initramfs-uImag
 bootm 0x44000000
 ```
 
-**2. Flash.** From the running initramfs:
+Two notes:
+
+* `0x44000000` is a safe load address. The kernel unpacks to `0x41000000` and needs about
+  22 MB, and the Q6 WiFi carveout starts at `0x4b000000`, so the image sits clear of both.
+* On my unit `0:APPSBLENV` has a bad CRC, so U-Boot falls back to its built-in environment on
+  every boot and the two `setenv` lines have to be repeated each time. `saveenv` makes them
+  stick if you want that.
+
+Interrupting autoboot has a side effect worth knowing about: U-Boot only initialises the
+RTL8367S switch when it falls through to its prompt. That is why TFTP booting works even on
+builds where booting from NAND leaves the switch dead. See finding 2 below.
+
+The router comes up on `192.168.1.1`, with LuCI on port 80 and SSH open with no root password.
+
+### 5. Flash it
+
+`scp` does **not** work against dropbear, there is no sftp-server. Pipe the file instead:
 
 ```sh
-sysupgrade -n /tmp/openwrt-...-squashfs-sysupgrade.bin
+cat openwrt-qualcommax-ipq50xx-mercusys_mr80x-v2-squashfs-sysupgrade.bin \
+    | ssh root@192.168.1.1 'cat > /tmp/sysupgrade.bin'
+
+ssh root@192.168.1.1 'sysupgrade -n /tmp/sysupgrade.bin'
 ```
 
-If `sysupgrade` fails at the ubus stage-2 handover, write the UBI volumes by hand — the tar
-holds `kernel` and `root`:
+Or upload the same file through LuCI under *System > Backup / Flash Firmware*, with "Keep
+settings" unchecked.
+
+Watch the serial console while it writes. The router reboots on its own and should come back on
+`192.168.1.1`, this time from flash.
+
+#### If sysupgrade fails at the ubus stage
+
+You may see `Command failed: ubus call system sysupgrade ... (Connection failed)`. If that
+happens, write the two UBI volumes by hand. The sysupgrade file is a tar containing `kernel`
+and `root`:
 
 ```sh
-ubiupdatevol /dev/ubi0_1 -s <size-of-root>   root
-ubiupdatevol /dev/ubi0_0 -s <size-of-kernel> kernel
+tar xf sysupgrade.bin
+cd sysupgrade-mercusys_mr80x-v2
+ubinfo -a | grep -B2 -A2 Name          # find which volume is which
+
+ubiupdatevol /dev/ubi0_1 -s $(stat -c%s root)   root      # rootfs first
+ubiupdatevol /dev/ubi0_0 -s $(stat -c%s kernel) kernel
 ```
 
 rootfs first, matching what `nand_upgrade_tar()` does. Read the volumes back and compare
-checksums before rebooting.
+checksums before you reboot:
 
-Note `scp` does not work against dropbear (no sftp-server); pipe instead:
-`cat file | ssh root@host 'cat > /tmp/file'`.
+```sh
+dd if=/dev/ubi0_0 bs=4096 count=$(( ($(stat -c%s kernel) + 4095) / 4096 )) 2>/dev/null \
+   | head -c $(stat -c%s kernel) | md5sum
+md5sum kernel
+```
+
+### 6. First steps on the flashed router
+
+The flashed system has a persistent SSH host key, unlike the initramfs which generates a
+throwaway one on every boot. Your client will refuse to connect until you drop the old entry:
+
+```sh
+ssh-keygen -R 192.168.1.1
+ssh root@192.168.1.1
+```
+
+Then set a password and switch the radios on, since OpenWrt ships them disabled:
+
+```sh
+passwd
+uci set wireless.default_radio0.disabled='0'
+uci set wireless.default_radio1.disabled='0'
+uci commit wireless
+wifi
+```
+
+Finally, put your PC's network adapter back to DHCP.
+
+### Recovery
+
+If the router does not come back after flashing, nothing is lost. `0:SBL1` and `0:APPSBL` are
+never written, so U-Boot is intact. Power cycle, interrupt autoboot, and TFTP the initramfs
+image again exactly as in step 4. From there you can rewrite the flash.
+
+The OEM firmware in `rootfs_1` is left untouched by all of this as well.
 
 ---
 
@@ -118,11 +285,11 @@ nand-ecc-step-size = <512>;
 
 U-Boot prints it plainly: `Device Size:128 MiB, Page size:2048, Spare Size:64, ECC:4-bit`.
 
-Decoding at `<8>` returns data that looks clean — stable across reads, no ECC errors logged —
-but with silently flipped bits. Symptoms it caused: caldata read from `0:art` was corrupt so
-the WiFi firmware asserted in `phyrf_bdf.c:605`; `mtdsplit: error occured while reading from
-"rootfs"`; `UBI error: unable to read from mtd15`; and `tp_data` appearing as "both volume
-tables are corrupted" when it was in fact perfectly intact.
+Decoding at `<8>` returns data that looks clean, stable across reads and with no ECC errors
+logged, but with silently flipped bits. Symptoms it caused: caldata read from `0:art` was
+corrupt so the WiFi firmware asserted in `phyrf_bdf.c:605`; `mtdsplit: error occured while
+reading from "rootfs"`; `UBI error: unable to read from mtd15`; and `tp_data` reporting "both
+volume tables are corrupted" when the volume was in fact perfectly intact.
 
 **Get this right before writing anything to NAND.**
 
@@ -139,10 +306,10 @@ path into NAND it never touches the RTL8367S, so the chip stays in reset and MDI
 `0xffff` forever: `unrecognized switch (id=0xffff, ver=0xffff)`.
 
 Every TFTP test goes through the U-Boot prompt, which is why the switch works there and fails
-only once you boot from flash — an easy trap to spend hours in.
+only once you boot from flash. That is an easy trap to spend hours in.
 
 Do not be misled by the OEM device tree's `//soc/mdio@90000 phy-reset-gpio = <0x06 0x27 0x00>`
-(GPIO 39). That is the MDIO/PHY reset and belongs on the bus node; it is a different pin for a
+(GPIO 39). That is the MDIO/PHY reset and belongs on the bus node. It is a different pin for a
 different job.
 
 ### 3. The CPU link must be 1 Gbit SGMII, not 2.5 Gbit HSGMII
@@ -159,18 +326,18 @@ that way, but at 3.125 GBaud this board loses packets:
 | | 2.5G HSGMII | 1G SGMII |
 |---|---|---|
 | ping 32 B, 50 packets | 6 % loss | 0 % |
-| ping 1400 B DF, 50 packets | 4–13 % loss | 0 % |
-| 20 × HTTP GET | 8–11 / 20 | 20 / 20 |
+| ping 1400 B DF, 50 packets | 4 to 13 % loss | 0 % |
+| 20 x HTTP GET | 8 to 11 of 20 | 20 of 20 |
 
-The loss is invisible in every counter — `/proc/net/dev` shows `errs 0 drop 0 fifo 0` on the
-conduit — because frames mangled on the SerDes are discarded by the PCS layer before the MAC
-ever sees a frame. 1 Gbit is ample; the radios do ~350 Mbit.
+The loss is invisible in every counter. `/proc/net/dev` shows `errs 0 drop 0 fifo 0` on the
+conduit, because frames mangled on the SerDes are discarded by the PCS layer before the MAC
+ever sees a frame. 1 Gbit is ample, the radios do about 350 Mbit.
 
 The switch port is **6** (`extints` in `rtl8365mb_main.c` lists port 6 as the SGMII/HSGMII
 external interface for the RTL8367S), and the switch node needs a child
 `mdio { compatible = "realtek,smi-mdio"; }` listing the internal PHYs plus `phy-handle` on each
-user port — without it the driver finds the chip and then aborts with
-`no MDIO bus node` / `-ENODEV`.
+user port. Without it the driver finds the chip and then aborts with `no MDIO bus node` and
+`-ENODEV`.
 
 ### 4. `DEVICE_DTS_CONFIG` must match the machid
 
@@ -178,10 +345,10 @@ user port — without it the driver finds the chip and then aborts with
 DEVICE_DTS_CONFIG := config@mp02.1
 ```
 
-This board's machid is `0x8040000` = mp02.1. A manual `bootm` works with any name because
-U-Boot falls back to the FIT's default configuration, so this looks cosmetic — but `bootipq`
-selects by machid and otherwise prints `Config not available` and drops into the OEM's HTTP
-recovery mode. The OEM FIT ships 24 configurations and does contain `config@mp02.1`.
+This board's machid is `0x8040000`, which is mp02.1. A manual `bootm` works with any name
+because U-Boot falls back to the FIT's default configuration, so this looks cosmetic. But
+`bootipq` selects by machid and otherwise prints `Config not available` and drops into the
+OEM's HTTP recovery mode. The OEM FIT ships 24 configurations and does contain `config@mp02.1`.
 
 ### 5. No pinctrl on the UART, or you lose console input
 
@@ -192,17 +359,17 @@ recovery mode. The OEM FIT ships 24 configurations and does contain `config@mp02
 };
 ```
 
-Re-muxing gpio20/21 in Linux kills console RX. TX keeps working because `printk` busy-polls,
-so the port looks healthy while not a single RX interrupt arrives. The mux *value* is not
-wrong — `blsp0_uart0` is legal for both pins — it is the pin configuration Linux writes.
-Inheriting U-Boot's setup works.
+Re-muxing gpio20/21 in Linux kills console RX. TX keeps working because `printk` busy-polls, so
+the port looks healthy while not a single RX interrupt arrives. The mux *value* is not wrong,
+`blsp0_uart0` is legal for both pins. It is the pin configuration Linux writes. Inheriting
+U-Boot's setup works.
 
 ### Bonus: measuring from WSL will lie to you
 
-Every network measurement taken from WSL in this port was misleading (SSH stalling at
-"banner exchange", phantom large-packet loss) because WSL2 NATs through the Windows host.
-Measure from the host. And on a flaky link a single successful probe proves nothing — the
-packet loss above only became visible over 20–50 repetitions.
+Every network measurement taken from WSL in this port was misleading, with SSH stalling at
+"banner exchange" and phantom large-packet loss, because WSL2 NATs through the Windows host.
+Measure from the host instead. And on a flaky link a single successful probe proves nothing:
+the packet loss above only became visible over 20 to 50 repetitions.
 
 ---
 
@@ -236,7 +403,7 @@ CONFIG_PACKAGE_luci=y
 | `new/package/kernel/mac80211/patches/ath11k/911-*.patch` | smaller ath11k DMA rings for 256 MB |
 | `new/package/firmware/ipq-wifi/files/board-*` | per-model board data, EU region |
 
-The `ipq-wifi` Makefile change is a local workaround: upstream serves board data from the
+The `ipq-wifi` Makefile change is a local workaround. Upstream serves board data from the
 `qca-wireless` git repo, so a device whose BDF is not yet there needs the files picked up from
 the package directory. The clean path is to submit the board data upstream.
 
@@ -250,9 +417,10 @@ DP_RXDMA_MON_STATUS_RING_SIZE 1024   monitor buf/dst 128
 ```
 
 rather than the much tighter values usually seen with that patch. Memory turned out never to be
-the constraint on this board (~50 MB free with both radios), and `DP_TX_COMP_RING_SIZE` also
-caps `DP_TX_IDR_SIZE`, i.e. in-flight TX descriptors — the wrong knob to turn down on a
-router. These larger values are **not** throughput-tested; treat them as a starting point.
+the constraint on this board, with about 50 MB free and both radios up, and
+`DP_TX_COMP_RING_SIZE` also caps `DP_TX_IDR_SIZE`, the number of in-flight TX descriptors. That
+is the wrong knob to turn down on a router. These larger values are **not** throughput-tested,
+so treat them as a starting point.
 
 ---
 

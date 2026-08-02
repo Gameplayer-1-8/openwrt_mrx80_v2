@@ -45,7 +45,7 @@ for chip, sub, caldata_file in (
     ("QCN6122 (5GHz)", "qcn6122", "caldata_qcn6122_correct.bin"),
 ):
     cal = load(caldata_file)
-    print(f"===== {chip} — factory caldata vs candidate BDFs =====")
+    print(f"===== {chip}: factory caldata vs candidate BDFs =====")
     print(f"  caldata: {caldata_file} ({len(cal)} bytes)")
     cands = collect(sub)
     scored = []
