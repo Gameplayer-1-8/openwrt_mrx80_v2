@@ -1,0 +1,56 @@
+From: OpenWrt MR80X v2 port
+Subject: mtd: spinand: esmt: do not register the OTP areas
+
+Kernel 6.18 added OTP support for the ESMT F50L1G41LB and F50D1G41LB. On the
+Mercusys MR80X v2 (IPQ5018, QPIC SPI NAND) that support bricks all flash access.
+
+Declaring SPINAND_USER_OTP_INFO/SPINAND_FACT_OTP_INFO makes spinand_init()
+call spinand_set_mtd_otp_ops(), and MTD registration then creates the
+user-otp and factory-otp nvmem devices. The resulting OTP access leaves
+CFG_OTP_ENABLE set on the chip while the driver's cfg_cache says it is clear.
+Because spinand_upd_cfg() skips the register write whenever the cached value
+already matches, every later attempt to leave OTP mode becomes a no-op, and
+no warning is printed.
+
+From then on the chip serves its OTP area instead of the array: page 0 returns
+the unique ID page, page 1 the ONFI parameter page, everything above reads as
+0xff. Reads report no error because the hardware erased-page detector
+legitimately flags those pages as blank, and writes fail with -EIO. The effect
+looks exactly like a wiped or unreadable flash, which is what made this hard
+to spot. Observed on the device:
+
+  spinanddbg: cfg as found at probe = 00 (otp_en=0)   first probe, chip is clean
+  spinanddbg: cfg as found at probe = 40 (otp_en=1)   second probe, OTP left on
+  spinanddbg: OTP off: cached=00 chip=40 -> chip=00   cache and chip disagree
+
+Forcing the register write restores normal operation immediately and the flash
+content is intact, so nothing is damaged, it is purely a mode the chip is left
+in. 6.12 is unaffected because it carries no OTP support for these parts.
+
+Drop the OTP declarations for both ESMT entries. The feature is not used on
+this hardware and the rest of the chip support is unchanged.
+
+--- a/drivers/mtd/nand/spi/esmt.c
++++ b/drivers/mtd/nand/spi/esmt.c
+@@ -208,9 +208,7 @@
+ 					      &write_cache_variants,
+ 					      &update_cache_variants),
+ 		     0,
+-		     SPINAND_ECCINFO(&f50l1g41lb_ooblayout, NULL),
+-		     SPINAND_USER_OTP_INFO(28, 2, &f50l1g41lb_user_otp_ops),
+-		     SPINAND_FACT_OTP_INFO(2, 0, &f50l1g41lb_fact_otp_ops)),
++		     SPINAND_ECCINFO(&f50l1g41lb_ooblayout, NULL)),
+ 	SPINAND_INFO("F50D1G41LB",
+ 		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_ADDR, 0x11, 0x7f,
+ 				0x7f),
+@@ -220,9 +218,7 @@
+ 					      &write_cache_variants,
+ 					      &update_cache_variants),
+ 		     0,
+-		     SPINAND_ECCINFO(&f50l1g41lb_ooblayout, NULL),
+-		     SPINAND_USER_OTP_INFO(28, 2, &f50l1g41lb_user_otp_ops),
+-		     SPINAND_FACT_OTP_INFO(2, 0, &f50l1g41lb_fact_otp_ops)),
++		     SPINAND_ECCINFO(&f50l1g41lb_ooblayout, NULL)),
+ 	SPINAND_INFO("F50D2G41KA",
+ 		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_ADDR, 0x51, 0x7f,
+ 				0x7f, 0x7f),

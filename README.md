@@ -1,10 +1,36 @@
 # OpenWrt for the Mercusys MR3000X (sold/branded MR80X v2)
 
 Working OpenWrt port for a Qualcomm IPQ5018 based Mercusys router, built against OpenWrt main
-(`ce16dd8`, kernel 6.12.100). Everything below was verified on real hardware.
+(`ce16dd8`). Everything below was verified on real hardware, with **kernel 6.18.39** as well as
+6.12.100.
 
 > **Read "Before you flash this" first.** The MAC address is currently hard-coded in the DTS
 > for one specific unit. You will want to change that.
+
+> **Kernel 6.18 needs a fix that is not upstream yet.** 6.18 added OTP support for this flash
+> chip, and that support leaves the chip stuck in OTP mode, where the whole flash reads as
+> `0xff` and every write fails. It looks exactly like a destroyed device but nothing is damaged.
+> [Details below.](#kernel-618-and-the-otp-trap) The images here contain the fix. Do not run a
+> stock 6.18 build on this router.
+
+## Download
+
+Prebuilt, tested images are on the [releases page](../../releases).
+
+| File | Purpose |
+|---|---|
+| `openwrt-6.18-mercusys_mr80x-v2-initramfs-uImage.itb` | boot over TFTP from U-Boot, runs in RAM, does not touch the flash |
+| `openwrt-6.18-mercusys_mr80x-v2-squashfs-sysupgrade.bin` | permanent install |
+
+## Source
+
+The complete tree is a branch on a fork of the official OpenWrt repository:
+
+**https://github.com/Gameplayer-1-8/openwrt/tree/mercusys-mr80x-v2-6.18**
+
+Four commits on top of `ce16dd8`: the switch detection retry, the SPI NAND OTP fix, the ath11k
+ring sizes, and the device support itself. The `src/` directory in this repository is the older
+patch-set form of the same changes, kept for reference.
 
 ---
 
@@ -285,7 +311,7 @@ The OEM firmware in `rootfs_1` is left untouched by all of this as well.
 
 ---
 
-## The five things that actually cost time
+## The six things that actually cost time
 
 These are the non-obvious ones. Each was verified on hardware.
 
@@ -377,18 +403,66 @@ the port looks healthy while not a single RX interrupt arrives. The mux *value* 
 `blsp0_uart0` is legal for both pins. It is the pin configuration Linux writes. Inheriting
 U-Boot's setup works.
 
+### Kernel 6.18 and the OTP trap
+
+By far the most expensive one, and the reason this section is no longer called "five".
+
+Kernel 6.18 added OTP support for the ESMT F50L1G41LB and F50D1G41LB. Declaring the OTP layouts
+makes MTD registration create `user-otp` and `factory-otp` nvmem devices, and the OTP access that
+follows leaves `CFG_OTP_ENABLE` set on the chip while the driver's `cfg_cache` says it is clear.
+`spinand_set_cfg()` returns early whenever the cache already matches, so every later attempt to
+leave OTP mode is silently a no-op. No warning is printed.
+
+The chip then serves its OTP area instead of the array:
+
+| Page | Content |
+|---|---|
+| 0 | unique ID page, a 32 byte pattern repeated 16 times |
+| 1 | ONFI parameter page (`ONFI` ... `POWERCHIP PSR1GS20DX`, ESMT rebadges this die) |
+| 2 and up | unwritten OTP, so `0xff` |
+
+Reads report success, because the hardware erased-page detector correctly flags those pages as
+blank. Writes fail with `-EIO`. A `sysupgrade` erases the rootfs, cannot write it back, and
+U-Boot then says `Both image corrupted`. Everything points at a destroyed flash. It is not:
+the content is untouched the whole time.
+
+What the diagnosis looked like on hardware, with a debug print of the config register:
+
+```
+cfg as found at probe = 00 (otp_en=0)   first probe, chip is clean
+cfg as found at probe = 40 (otp_en=1)   second probe, OTP was left on
+OTP off: cached=00 chip=40 -> chip=00   the cache and the chip disagree
+```
+
+Forcing that one register write brought everything back instantly. `0:appsbl` went from all
+`0xff` to `7f 45 4c 46`, `rootfs` to `55 42 49 23`, and `0:art` matched its earlier checksum
+byte for byte.
+
+The fix, `0402-mtd-spinand-esmt-do-not-register-OTP-areas.patch`, drops the OTP declarations for
+both ESMT entries. 6.12 never had OTP support for these parts, which is why it is unaffected.
+
+Two things made this findable after a lot of fruitless source comparison. A raw read through the
+`MEMREAD` ioctl with `MTD_OPS_RAW` bypasses both the ECC engine and the erased-page detector and
+shows what the chip really puts on the wire; `tools/mtdprobe.c` does that, and pre-fills its
+buffers with `0xa5` so "the driver wrote `0xff`" stays distinguishable from "the driver never
+wrote anything". And simply looking at the bytes that did survive instead of only hashing them:
+the `ONFI` signature identified the mode in seconds.
+
 ---
 
 ## Building
 
 ```sh
-git clone https://github.com/openwrt/openwrt
-cd openwrt && git checkout ce16dd8
-# apply src/existing-files.diff, copy src/new/ over the tree
+git clone -b mercusys-mr80x-v2-6.18 https://github.com/Gameplayer-1-8/openwrt
+cd openwrt
 ./scripts/feeds update -a && ./scripts/feeds install -a
 make menuconfig      # Qualcomm Atheros IPQ50xx -> MERCUSYS MR80X v2
+                     # for 6.18: Advanced configuration -> Use the testing kernel
 make -j$(nproc)
 ```
+
+That branch already contains everything. The older route, applying `src/existing-files.diff` and
+copying `src/new/` over a stock checkout of `ce16dd8`, still works and produces the same tree.
 
 Packages beyond the defaults:
 
@@ -406,6 +480,7 @@ CONFIG_PACKAGE_luci=y
 | `existing-files.diff` | changes to files that already exist in the tree |
 | `new/target/linux/qualcommax/dts/ipq5018-mr80x-v2.dts` | the board DTS |
 | `new/target/linux/qualcommax/patches-6.12/0918-*.patch` | poll for the switch instead of failing the first MDIO read |
+| `new/target/linux/qualcommax/patches-6.18/0402-*.patch` | keep the SPI NAND out of OTP mode on kernel 6.18 |
 | `new/package/kernel/mac80211/patches/ath11k/911-*.patch` | smaller ath11k DMA rings for 256 MB |
 | `new/package/firmware/ipq-wifi/files/board-*` | per-model board data, EU region |
 
