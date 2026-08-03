@@ -71,8 +71,10 @@ Working: both radios, DSA switch with `wan`/`lan1`/`lan2`/`lan3`, LuCI, sysupgra
 NAND, serial console (in and out), per-unit WiFi calibration and MAC addresses read from flash
 at runtime, 2.5 Gbit CPU port.
 
-About 50 MB RAM free with both radios up. 5 GHz throughput is roughly 350 Mbit with both cores
-saturated, since mainline ath11k has no NSS offload for IPQ5018.
+About 50 MB RAM free with both radios up, but only with the ath11k ring-size patch applied.
+Without it the same board sits at zero available memory, see
+[About the ath11k ring sizes](#about-the-ath11k-ring-sizes). 5 GHz throughput is roughly
+350 Mbit with both cores saturated, since mainline ath11k has no NSS offload for IPQ5018.
 
 Ports and LEDs are confirmed on hardware:
 
@@ -523,11 +525,28 @@ DP_TX_COMP_RING_SIZE 8192   DP_RXDMA_BUF_RING_SIZE 2048
 DP_RXDMA_MON_STATUS_RING_SIZE 1024   monitor buf/dst 128
 ```
 
-rather than the much tighter values usually seen with that patch. Memory turned out never to be
-the constraint on this board, with about 50 MB free and both radios up, and
-`DP_TX_COMP_RING_SIZE` also caps `DP_TX_IDR_SIZE`, the number of in-flight TX descriptors. That
-is the wrong knob to turn down on a router. These larger values are **not** throughput-tested,
-so treat them as a starting point.
+rather than the much tighter values usually seen with that patch, because `DP_TX_COMP_RING_SIZE`
+also caps `DP_TX_IDR_SIZE`, the number of in-flight TX descriptors. That is the wrong knob to
+turn down on a router. These larger values are **not** throughput-tested, so treat them as a
+starting point.
+
+**The patch itself is needed.** It was carried for a long time as inherited baggage, with a note
+here claiming memory was never the constraint on this board. That got measured properly in the
+end: same initramfs image, same two APs up, the patch the only difference.
+
+| | with `911` | without |
+|---|---|---|
+| `MemFree` | 54,400 kB | 18,976 kB |
+| `MemAvailable` | 32,584 kB | **0 kB** |
+
+Roughly 35 MB, almost all of it the monitor rings going from 128 entries to 4096 and 2048 across
+two radios. Without it both radios still come up and nothing had failed yet, but there is no
+headroom left whatsoever. Memory is not a problem on this board *because* this patch is applied,
+not independently of it.
+
+One practical note for anyone repeating the measurement: bringing the APs up costs only about
+4.7 MB. The rings are allocated when the driver probes, long before any interface exists, so a
+reading taken before `wifi up` already tells you the answer.
 
 ---
 
